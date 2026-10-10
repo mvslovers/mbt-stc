@@ -80,11 +80,21 @@ mbt.command("restart",
     end
     ctx.log("compress job MBTCOMP " .. jobid .. " waits for " .. lib)
 
-    -- 2. stop; if the stop does not go out, the job would wait for ever
+    -- 2. stop; if the stop does not go out, the job would wait for ever.
+    -- A stop that went out without an answer is the normal case for a
+    -- server that carries mvsMF: it answers its own stop with a 5xx while
+    -- it quiesces, and mbt does not send it again elsewhere. Going on with
+    -- the start is safe even if it did not arrive: the new server queues
+    -- behind the compress job for the library, so two never run at once.
     local ok, err = pcall(function() show(ctx, (ctx.console("P " .. stc))) end)
     if not ok then
-      pcall(ctx.console, "C MBTCOMP")
-      error("restart: P " .. stc .. " failed, compress job cancelled: " .. tostring(err))
+      if tostring(err):find("may have run", 1, true) then
+        ctx.warn("P " .. stc .. " went out but its answer was lost (" .. tostring(err)
+          .. ") -- going on as if it stops")
+      else
+        pcall(ctx.console, "C MBTCOMP")
+        error("restart: P " .. stc .. " failed, compress job cancelled: " .. tostring(err))
+      end
     end
 
     -- 3. start: waits for the library until the compress is done
