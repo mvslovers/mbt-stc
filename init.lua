@@ -64,9 +64,10 @@ local function show(ctx, lines)
   for _, l in ipairs(lines) do ctx.log("  " .. l) end
 end
 
--- stop the server, compress its development library, start it again
-mbt.command("restart",
-  function(ctx)
+mbt.command{
+  name = "restart",
+  description = "stop the server, compress its development library, start it again",
+  run = function(ctx)
     local lib = ctx.project.deploy_target
     if not lib then
       error("restart: no deploy target -- the project builds no load modules, or this mbt is"
@@ -133,4 +134,5 @@ mbt.command("restart",
     else
       ctx.log(lib .. ": fill not readable after the restart (mvsMF " .. tostring(code) .. ")")
     end
-  end)
+  end,
+}
