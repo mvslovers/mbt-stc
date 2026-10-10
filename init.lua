@@ -17,11 +17,18 @@
 -- with it (HTTPD); the console falls back to Hercules by itself.
 
 local function jobcard(t)
-  -- two cards: mvsMF appends NOTIFY, USER and PASSWORD to the last one
-  return {
+  -- NOTIFY on a card of its own: mvsMF appends USER and PASSWORD to the
+  -- last card, and without a NOTIFY it adds a placeholder (IKJ144I)
+  local user = string.upper((t.mvsmf and t.mvsmf.user) or "")
+  local cards = {
     "//MBTCOMP JOB (1),'MBT COMPRESS',CLASS=" .. t.jobclass .. ",",
     "//            MSGCLASS=" .. t.msgclass .. ",MSGLEVEL=(1,1)",
   }
+  if user:match("^[A-Z@#$][A-Z0-9@#$]*$") and #user <= 7 then
+    cards[2] = cards[2] .. ","
+    cards[3] = "//            NOTIFY=" .. user
+  end
+  return cards
 end
 
 local function compress_jcl(t, lib, stc)
@@ -83,4 +90,15 @@ mbt.command("restart",
     -- 3. start: waits for the library until the compress is done
     local lines = ctx.console("S " .. stc)
     show(ctx, lines)
+
+    -- 4. the fill after the compress; a server that carried mvsMF has just
+    -- come back, so this may fail -- it is a report, not a step
+    local ok2, code, list = pcall(ctx.mvs.request, { path = "/restfiles/ds?dslevel=" .. lib })
+    local used = ok2 and code == 200 and list:match('"used"%s*:%s*"(%d+)"')
+    local size = ok2 and code == 200 and list:match('"sizex"%s*:%s*"(%d+)"')
+    if used then
+      ctx.log(lib .. ": " .. used .. "% of " .. (size or "?") .. " tracks used after the compress")
+    else
+      ctx.log(lib .. ": fill not readable after the restart (mvsMF " .. tostring(code) .. ")")
+    end
   end)
