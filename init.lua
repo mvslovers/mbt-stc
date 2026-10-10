@@ -49,6 +49,17 @@ local function compress_jcl(t, lib, stc)
   return table.concat(cards, "\n") .. "\n"
 end
 
+-- active reports whether stc is in D A,L. A failing display (mvsMF going
+-- down under it) counts as "still there": the caller asks again.
+local function active(ctx, stc)
+  local ok, lines = pcall(ctx.console, "D A,L")
+  if not ok then return true end
+  for _, l in ipairs(lines) do
+    if l:match("^%s*" .. stc .. "%s") then return true end
+  end
+  return false
+end
+
 local function show(ctx, lines)
   for _, l in ipairs(lines) do ctx.log("  " .. l) end
 end
@@ -90,7 +101,18 @@ mbt.command("restart",
     if not ok then
       if tostring(err):find("may have run", 1, true) then
         ctx.warn("P " .. stc .. " went out but its answer was lost (" .. tostring(err)
-          .. ") -- going on as if it stops")
+          .. ") -- waiting for it to end")
+        -- the server is taking mvsMF down with it: an S sent now could reach
+        -- the dying mvsMF and be lost. Wait until it has gone; by then mvsMF
+        -- refuses the connection and the S goes to the next channel.
+        local gone = false
+        for _ = 1, 60 do
+          if not active(ctx, stc) then gone = true break end
+        end
+        if not gone then
+          error("restart: " .. stc .. " is still active after P -- not started again; check it,"
+            .. " then S " .. stc .. " (the compress job MBTCOMP waits for the library)")
+        end
       else
         pcall(ctx.console, "C MBTCOMP")
         error("restart: P " .. stc .. " failed, compress job cancelled: " .. tostring(err))
