@@ -1,0 +1,33 @@
+# A tag vX.Y.Z publishes mbt-stc-X.Y.Z-plugin.tar.gz -- the asset mbt 3
+# resolves [plugins] "mvslovers/mbt-stc" against.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Package
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          NAME="mbt-stc-$VER"
+          mkdir -p "stage/$NAME"
+          cp -R plugin.toml init.lua README.md "stage/$NAME/"
+          if [ -f LICENSE ]; then cp LICENSE "stage/$NAME/"; fi
+          if [ -d lua ]; then cp -R lua "stage/$NAME/"; fi
+          tar -C stage -czf "$NAME-plugin.tar.gz" "$NAME"
+          tar -tzf "$NAME-plugin.tar.gz"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          PRE=""
+          case "$TAG" in *-*) PRE="--prerelease" ;; esac
+          gh release create "$TAG" $PRE --title "$TAG" --generate-notes "mbt-stc-${TAG#v}-plugin.tar.gz"

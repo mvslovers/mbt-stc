@@ -1,0 +1,3 @@
+# mbt-stc: started-task commands for mbt 3 projects
+api  = 1                   # the mbt Lua API this plugin is written for
+exec = []                  # runs no program: it uses the console and mvsMF

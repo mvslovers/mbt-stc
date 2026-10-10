@@ -1,0 +1,86 @@
+-- mbt-stc: started-task commands for MBT.
+--
+-- mbt run restart [-- STC]     (STC: the project name, upper case)
+--
+-- Restarts the project's server and compresses its development library on
+-- the way. A deploy replaces members, and a replaced member's old space stays
+-- dead until the library is compressed; a compress needs the library to
+-- itself (DISP=OLD), which only happens while the server is down.
+--
+-- The order is left to MVS rather than to waiting here:
+--   1. submit a compress job: it asks for the library DISP=OLD and waits
+--      (IEF099I) while the running server holds it;
+--   2. P <STC>: the server ends, the job gets the library and compresses;
+--   3. S <STC>: the new server asks for its STEPLIB and waits until the
+--      job is done.
+-- The job is submitted before the stop because the stop may take mvsMF
+-- with it (HTTPD); the console falls back to Hercules by itself.
+
+local function jobcard(t)
+  -- two cards: mvsMF appends NOTIFY, USER and PASSWORD to the last one
+  return {
+    "//MBTCOMP JOB (1),'MBT COMPRESS',CLASS=" .. t.jobclass .. ",",
+    "//            MSGCLASS=" .. t.msgclass .. ",MSGLEVEL=(1,1)",
+  }
+end
+
+local function compress_jcl(t, lib, stc)
+  local cards = jobcard(t)
+  for _, c in ipairs({
+    "//* Compress " .. lib .. " in place. Waits for the library",
+    "//* until " .. stc .. " has stopped (mbt run restart).",
+    "//COMP     EXEC PGM=IEBCOPY",
+    "//SYSPRINT DD  SYSOUT=*",
+    "//LIB      DD  DSN=" .. lib .. ",DISP=OLD",
+    "//SYSUT3   DD  UNIT=SYSDA,SPACE=(TRK,(5,5))",
+    "//SYSUT4   DD  UNIT=SYSDA,SPACE=(TRK,(5,5))",
+    "//SYSIN    DD  *",
+    "  COPY OUTDD=LIB,INDD=LIB",
+    "/*",
+    "//",
+  }) do cards[#cards + 1] = c end
+  return table.concat(cards, "\n") .. "\n"
+end
+
+local function show(ctx, lines)
+  for _, l in ipairs(lines) do ctx.log("  " .. l) end
+end
+
+-- stop the server, compress its development library, start it again
+mbt.command("restart",
+  function(ctx)
+    local lib = ctx.project.deploy_target
+    if not lib then
+      error("restart: no deploy target -- the project builds no load modules, or this mbt is"
+        .. " older than ctx.project.deploy_target (mbt 3.0.0-dev of 2026-10-10)")
+    end
+    local stc = string.upper(ctx.args[1] or ctx.project.name)
+    if not stc:match("^[A-Z@#$][A-Z0-9@#$]*$") or #stc > 8 then
+      error("restart: '" .. stc .. "' is not a started task name -- say: mbt run restart -- NAME")
+    end
+    local t = ctx.target()
+
+    -- 1. the compress job, before anything stops
+    local status, body = ctx.mvs.request{ method = "PUT", path = "/restjobs/jobs",
+      body = compress_jcl(t, lib, stc), content_type = "text/plain" }
+    if ctx.dry_run then
+      ctx.log("(dry run) would stop " .. stc .. ", compress " .. lib .. ", start " .. stc)
+      return
+    end
+    local jobid = body:match('"jobid"%s*:%s*"([^"]+)"')
+    if status < 200 or status > 299 or not jobid then
+      error("restart: the compress job was not submitted (HTTP " .. status .. "): " .. body)
+    end
+    ctx.log("compress job MBTCOMP " .. jobid .. " waits for " .. lib)
+
+    -- 2. stop; if the stop does not go out, the job would wait for ever
+    local ok, err = pcall(function() show(ctx, (ctx.console("P " .. stc))) end)
+    if not ok then
+      pcall(ctx.console, "C MBTCOMP")
+      error("restart: P " .. stc .. " failed, compress job cancelled: " .. tostring(err))
+    end
+
+    -- 3. start: waits for the library until the compress is done
+    local lines = ctx.console("S " .. stc)
+    show(ctx, lines)
+  end)
